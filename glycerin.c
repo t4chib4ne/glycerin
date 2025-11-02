@@ -4,12 +4,18 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <error.h>
 
 #define KiB 1024
 #define MiB 1024 * 1024
 #define DAY 24 * 60 * 60
+
+char *BUF = NULL;
+size_t current_log_size = 0;
+char time_fmt_buf[32] = { 0 };
+void (time_func) ();
 
 typedef enum
 {
@@ -18,6 +24,51 @@ typedef enum
   HUMAN_READABLE,
   HUMAN_READABLE_T
 } time_fmt_t;
+
+void
+time_func_none ()
+{
+}
+
+void
+time_func_epoch ()
+{
+  struct timespec ts;
+  if (clock_gettime (CLOCK_REALTIME, &ts))
+    error (EXIT_FAILURE, 0, "clock_gettime not working");
+
+  snprintf (time_fmt_buf, sizeof (time_fmt_buf), "%lu%03ld", ts.tv_sec, ts.tv_nsec / 1000000L);
+}
+
+void
+time_func_fmt (const char *fmt)
+{
+  struct timespec ts;
+  if (clock_gettime (CLOCK_REALTIME, &ts))
+    error (EXIT_FAILURE, 0, "clock_gettime not working");
+
+  struct tm tp;
+  if (! gmtime_r (&ts.tv_sec, &tp))
+    error (EXIT_FAILURE, 0, "gmtime_r not working");
+
+  size_t n = strftime (time_fmt_buf, sizeof (time_fmt_buf), fmt, &tp);
+  if (! n)
+    error (EXIT_FAILURE, 0, "strftime not working");
+
+  snprintf (time_fmt_buf + n, sizeof (time_fmt_buf) - n, ".%05ld", ts.tv_nsec / 1000000L);
+}
+
+void
+time_func_hmr ()
+{
+  time_func_fmt ("%Y-%m-%d_%H:%M:%S");
+}
+
+void
+time_func_hmrt ()
+{
+  time_func_fmt ("%Y-%m-%dT%H:%M:%S");
+}
 
 struct config
 {
@@ -143,8 +194,23 @@ parse_cli (struct config *conf, int argc, char *const *argv)
   else
     conf->arg = argv[argc - 1];
 
+  for (int i = 0; i < strlen (conf->arg); ++i)
+    if (conf->arg[i] == '/' || conf->arg[i] == '.')
+      error (EXIT_FAILURE, 0, "APPNAME contains unallowed characters");
+
   if (conf->time_fmt > HUMAN_READABLE_T)
     error (EXIT_FAILURE, 0, "chosen time format is invalid");
+}
+
+void
+setup (struct config *conf)
+{
+  // Select time function
+
+  // Allocate our buffer
+  BUF = malloc (conf->buf_size * sizeof (char));
+  if (! BUF)
+    error (EXIT_FAILURE, 0, "fatal: could not allocate buffer");
 }
 
 int
@@ -153,7 +219,13 @@ main (int argc, char **argv)
   struct config conf = default_config ();
   parse_cli (&conf, argc, argv);
 
-  printf ("APPNAME: %s\n", conf.arg);
+  time_func_epoch ();
+  printf ("%s\n", time_fmt_buf);
+  time_func_hmr ();
+  printf ("%s\n", time_fmt_buf);
+  time_func_hmrt ();
+  printf ("%s\n", time_fmt_buf);
 
+  free (BUF);
   return EXIT_SUCCESS;
 }
