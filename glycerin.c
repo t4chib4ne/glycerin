@@ -66,65 +66,78 @@ FILE *current_log = NULL;
 // Speichert die Laenge des Logs.
 size_t current_log_size = 0;
 
+// Speichert das Erstellungsdatum des Logs.
+struct timespec current_log_birth;
+
+// Pfad zum vorherigen Log.
+char *prev_log_name = NULL;
+
 // Buffer in dem sich die aktuelle Uhrzeit im
 // gewaehlten Format befindet nach Aufruf von
 // `time_func`
-char time_fmt_buf[32] = { 0 };
+#define TIME_FMT_BUF_SIZE 32
+char time_fmt_buf[TIME_FMT_BUF_SIZE] = { 0 };
 
 // Ermittelt die aktuelle Uhrzeit.
-void (*time_func) ();
+char *(*time_func) (const struct timespec *ts);
 
-void
-time_func_none ()
+char *
+time_func_none (const struct timespec *ts)
 {
+  return NULL;
 }
 
-void
-time_func_epoch ()
+char *
+time_func_epoch (const struct timespec *ts)
 {
-  struct timespec ts;
-  if (clock_gettime (CLOCK_REALTIME, &ts))
-    error (EXIT_FAILURE, 0, "clock_gettime not working");
-
-  snprintf (time_fmt_buf, sizeof (time_fmt_buf), "%lu%03ld", ts.tv_sec, ts.tv_nsec / 1000000L);
+  snprintf (time_fmt_buf, sizeof (time_fmt_buf), "%lu%03ld", ts->tv_sec, ts->tv_nsec / 1000000L);
+  return time_fmt_buf;
 }
 
-void
-time_func_fmt (const char *fmt)
+char *
+time_func_fmt (const struct timespec *ts, const char *fmt)
 {
-  struct timespec ts;
-  if (clock_gettime (CLOCK_REALTIME, &ts))
-    error (EXIT_FAILURE, 0, "clock_gettime not working");
-
   struct tm tp;
-  if (! gmtime_r (&ts.tv_sec, &tp))
+  if (! gmtime_r (&ts->tv_sec, &tp))
     error (EXIT_FAILURE, 0, "gmtime_r not working");
 
   size_t n = strftime (time_fmt_buf, sizeof (time_fmt_buf), fmt, &tp);
   if (! n)
     error (EXIT_FAILURE, 0, "strftime not working");
 
-  snprintf (time_fmt_buf + n, sizeof (time_fmt_buf) - n, ".%05ld", ts.tv_nsec / 1000000L);
-}
-
-void
-time_func_hmr ()
-{
-  time_func_fmt ("%Y-%m-%d_%H:%M:%S");
-}
-
-void
-time_func_hmrt ()
-{
-  time_func_fmt ("%Y-%m-%dT%H:%M:%S");
+  snprintf (time_fmt_buf + n, sizeof (time_fmt_buf) - n, ".%05ld", ts->tv_nsec / 1000000L);
+  return time_fmt_buf;
 }
 
 char *
-default_base_dir ()
+time_func_hmr (const struct timespec *ts)
 {
-  if (getuid () == 0)
-    return "/var/log/";
+  return time_func_fmt (ts, "%Y-%m-%d_%H:%M:%S");
+}
 
+char *
+time_func_hmrt (const struct timespec *ts)
+{
+  return time_func_fmt (ts, "%Y-%m-%dT%H:%M:%S");
+}
+
+char *
+base_dir ()
+{
+  // We are root.
+  if (getuid () == 0)
+    {
+      const size_t s_len = strlen ("/var/log/") + strlen (conf.arg);
+      char *s = malloc ((s_len + 1) * sizeof (char));
+      if (! s)
+        error (EXIT_FAILURE, 0, "cannot malloc");
+      strcat (s, "/var/log/");
+      strcat (s, conf.arg);
+      return s;
+    }
+
+  // We are not root and determine our
+  // base dir via the env.
   char *base_dir = getenv ("XDG_DATA_HOME");
   const char *subdir = "glycerin/";
   if (! base_dir)
@@ -133,10 +146,12 @@ default_base_dir ()
       subdir = ".local/share/glycerin/logs/";
     }
 
-  size_t base_dir_len = strlen (base_dir);
-  int needs_slash = base_dir[base_dir_len - 1] == '/' ? 1 : 0;
+  const size_t app_dir_len = conf.no_subdirs ? 0 : strlen (conf.arg) + 1;
+  const size_t base_dir_len = strlen (base_dir);
+  const int needs_slash = base_dir[base_dir_len - 1] == '/' ? 1 : 0;
+  const size_t s_len = strlen (base_dir) + needs_slash + strlen (subdir) + app_dir_len;
 
-  char *s = malloc (strlen (base_dir) + needs_slash + strlen (subdir));
+  char *s = malloc ((s_len + 1) * sizeof (char));
   if (! s)
     error (EXIT_FAILURE, 0, "cannot malloc");
 
@@ -144,6 +159,12 @@ default_base_dir ()
   if (needs_slash)
     strcat (s, "/");
   strcat (s, subdir);
+
+  if (app_dir_len)
+    {
+      strcat (s, conf.arg);
+      strcat (s, "/");
+    }
 
   return s;
 }
@@ -267,11 +288,54 @@ mkdirp (char *pathname)
   return mkdir (pathname, 0755);
 }
 
+char *
+set_prev_log_name ()
+{
+  if (conf.no_subdirs)
+    {
+      strcpy (prev_log_name, conf.arg);
+      strcat (prev_log_name, "_");
+      strcat (prev_log_name, time_func (&current_log_birth));
+    }
+  else
+    strcpy (prev_log_name, time_func (&current_log_birth));
+
+  strcat (prev_log_name, LOG_EXT);
+
+  return prev_log_name;
+}
+
+int
+open_current_log (const char *filename)
+{
+  current_log = fopen (filename, "w");
+  if (! current_log)
+    return 1;
+
+  if (clock_gettime (CLOCK_REALTIME, &current_log_birth))
+    return 1;
+
+  return 0;
+}
+
+int
+rotate ()
+{
+  if (fclose (current_log))
+    return 1;
+
+  if (rename (current_log_name, set_prev_log_name ()))
+    return 1;
+
+  return open_current_log (current_log_name);
+}
+
 void
 free_globals ()
 {
   free (BUF);
   free (conf.base_dir);
+  free (prev_log_name);
 }
 
 void
@@ -282,24 +346,41 @@ setup_globals ()
   if (! BUF)
     error (EXIT_FAILURE, 0, "fatal: could not allocate buffer");
 
-  // Append the app subdir to the base dir.
-  if (! conf.no_subdirs)
-    {
-      const size_t base_dir_len = strlen (conf.base_dir);
-      char *s = realloc (conf.base_dir, base_dir_len + strlen (conf.arg) + 1);
-      if (! s)
-        error (EXIT_FAILURE, 0, "fatal: could not allocate log path");
-      strcat (s + base_dir_len, "/");
-      strcat (s + base_dir_len + 1, conf.arg);
-      conf.base_dir = s;
-    }
-
   // Switch cwd to the logging base dir,
   // create it if it does not exist.
   if (mkdirp (conf.base_dir) == -1)
     error (EXIT_FAILURE, 0, "fatal: could not create logdir");
   if (chdir (conf.base_dir) == -1)
     error (EXIT_FAILURE, 0, "fatal: cannot chdir to %s", conf.base_dir);
+
+  // The current log file name depends on,
+  // whether we use subdirs or not.
+  if (conf.no_subdirs)
+    {
+      const size_t current_log_name_len = strlen (conf.arg) + strlen (LOG_EXT);
+
+      current_log_name = malloc ((current_log_name_len + 1) * sizeof (char));
+      prev_log_name = malloc ((current_log_name_len + TIME_FMT_BUF_SIZE + 2) * sizeof (char));
+      if (! current_log_name || ! prev_log_name)
+        error (EXIT_FAILURE, 0, "fatal: cannot malloc");
+
+      strcpy (current_log_name, conf.arg);
+      strcat (current_log_name, LOG_EXT);
+    }
+  else
+    {
+      current_log_name = "current.log";
+      prev_log_name = malloc ((TIME_FMT_BUF_SIZE + strlen (LOG_EXT) + 1) * sizeof (char));
+      if (! prev_log_name)
+        error (EXIT_FAILURE, 0, "fatal: cannot malloc");
+    }
+
+  // Open the log or create a new one.
+  struct stat st;
+  if (stat (current_log_name, &st))
+    error (EXIT_FAILURE, 0, "fatal: a current log already exist! Please remove it: %s", current_log_name);
+  else if (open_current_log (current_log_name))
+    error (EXIT_FAILURE, 0, "fatal: could not open log: %s", current_log_name);
 
   // Select time function
   switch (conf.time_fmt)
@@ -318,11 +399,11 @@ setup_globals ()
 int
 main (const int argc, char *const *argv)
 {
-  conf.base_dir = default_base_dir ();
+  parse_cli (argc, argv);
+
+  conf.base_dir = base_dir ();
   if (! conf.base_dir)
     error (EXIT_FAILURE, 0, "fatal: could not determine directory for storing logs");
-
-  parse_cli (argc, argv);
 
   setup_globals ();
 
