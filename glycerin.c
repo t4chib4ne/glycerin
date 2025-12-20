@@ -1,3 +1,5 @@
+#include <bits/time.h>
+#include <dirent.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -71,12 +73,19 @@ struct timespec current_log_birth;
 
 // Pfad zum vorherigen Log.
 char *prev_log_name = NULL;
+size_t prev_log_name_len = 0;
 
 // Buffer in dem sich die aktuelle Uhrzeit im
 // gewaehlten Format befindet nach Aufruf von
 // `time_func`
 #define TIME_FMT_BUF_SIZE 32
 char time_fmt_buf[TIME_FMT_BUF_SIZE] = { 0 };
+
+// Dateinamen der alten Logs.
+char **old_logs = NULL;
+
+// Anzahl Logs exclusive des aktuellen Logs.
+unsigned int log_count = 0;
 
 // Ermittelt die aktuelle Uhrzeit.
 char *(*time_func) (const struct timespec *ts);
@@ -90,7 +99,7 @@ time_func_none (const struct timespec *ts)
 char *
 time_func_epoch (const struct timespec *ts)
 {
-  snprintf (time_fmt_buf, sizeof (time_fmt_buf), "%lu%03ld", ts->tv_sec, ts->tv_nsec / 1000000L);
+  snprintf (time_fmt_buf, TIME_FMT_BUF_SIZE, "%lu%03ld", ts->tv_sec, ts->tv_nsec / 1000000L);
   return time_fmt_buf;
 }
 
@@ -121,6 +130,26 @@ time_func_hmrt (const struct timespec *ts)
   return time_func_fmt (ts, "%Y-%m-%dT%H:%M:%S");
 }
 
+bool
+has_suffix (const char *s, const char *suffix)
+{
+  const size_t s_len = strlen (s);
+  const size_t suffix_len = strlen (suffix);
+  if (s_len < suffix_len)
+    return false;
+
+  return ! strcmp (&s[s_len - suffix_len], suffix);
+}
+
+int
+log_name_cmp (const void *lhs, const void *rhs)
+{
+  const char *left = *((char **) lhs);
+  const char *right = *((char **) rhs);
+
+  return strcmp (right, left);
+}
+
 char *
 base_dir ()
 {
@@ -148,7 +177,7 @@ base_dir ()
 
   const size_t app_dir_len = conf.no_subdirs ? 0 : strlen (conf.arg) + 1;
   const size_t base_dir_len = strlen (base_dir);
-  const int needs_slash = base_dir[base_dir_len - 1] == '/' ? 1 : 0;
+  const int needs_slash = base_dir[base_dir_len - 1] == '/' ? 0 : 1;
   const size_t s_len = strlen (base_dir) + needs_slash + strlen (subdir) + app_dir_len;
 
   char *s = malloc ((s_len + 1) * sizeof (char));
@@ -258,7 +287,7 @@ int
 mkdirp (char *pathname)
 {
   struct stat st;
-  int offset = 0;
+  char *offset = pathname;
   char *slash_ptr;
 
   if (! stat (pathname, &st))
@@ -266,26 +295,27 @@ mkdirp (char *pathname)
 
   while (true)
     {
-      slash_ptr = strchr (pathname + offset, '/');
+      slash_ptr = strchr (offset, '/');
       if (! slash_ptr)
-        continue;
+        break;
 
       *slash_ptr = '\0';
 
       if (! stat (pathname, &st))
-        {
-          *slash_ptr = '/';
-          continue;
-        }
+        goto last;
 
-      if (mkdir (pathname, 0755) == -1)
+      if (*pathname != '\0' && mkdir (pathname, 0755) == -1)
         {
           *slash_ptr = '/';
           return -1;
         }
+
+    last:
+      *slash_ptr = '/';
+      offset = slash_ptr + 1;
     }
 
-  return mkdir (pathname, 0755);
+  return 0;
 }
 
 char *
@@ -294,11 +324,11 @@ set_prev_log_name ()
   if (conf.no_subdirs)
     {
       strcpy (prev_log_name, conf.arg);
-      strcat (prev_log_name, "_");
-      strcat (prev_log_name, time_func (&current_log_birth));
+      strcat (prev_log_name, ".");
+      strcat (prev_log_name, time_func_epoch (&current_log_birth));
     }
   else
-    strcpy (prev_log_name, time_func (&current_log_birth));
+    strcpy (prev_log_name, time_func_epoch (&current_log_birth));
 
   strcat (prev_log_name, LOG_EXT);
 
@@ -319,6 +349,77 @@ open_current_log (const char *filename)
 }
 
 int
+evict_setup ()
+{
+  DIR *d;
+  struct dirent *de;
+  d = opendir (".");
+
+  size_t size = conf.log_count;
+  int idx = 0;
+
+  old_logs = calloc (conf.log_count, sizeof (*old_logs));
+  if (! old_logs)
+    return 1;
+
+  // Read all log files.
+  while ((de = readdir (d)) != NULL)
+    {
+      if (de->d_type != DT_REG || ! has_suffix (de->d_name, LOG_EXT) || ! strcmp (de->d_name, current_log_name))
+        continue;
+
+      if (idx == size)
+        {
+          old_logs = realloc (old_logs, size * 2 * sizeof (*old_logs));
+          size *= 2;
+        }
+
+      old_logs[idx] = malloc ((strlen (de->d_name) + 1) * sizeof (char));
+      strcpy (old_logs[idx], de->d_name);
+      idx++;
+    }
+
+  closedir (d);
+
+  // Sort all log files.
+  qsort (old_logs, idx, sizeof (*old_logs), log_name_cmp);
+
+  if (idx <= conf.log_count)
+    {
+      log_count = idx;
+      return 0;
+    }
+
+  // Delete logs that are too many.
+  for (int i = conf.log_count; i < idx; i++)
+    {
+      if (unlink (old_logs[i]))
+        fprintf (stderr, "error: could not unlink: %s\n", old_logs[i]);
+      free (old_logs[i]);
+    }
+
+  // Shrink down log tracker.
+  old_logs = realloc (old_logs, conf.log_count * sizeof (*old_logs));
+
+  return 0;
+}
+
+void
+evict_file (const char *newfile)
+{
+  if (log_count <= conf.log_count)
+    return;
+
+  if (unlink (old_logs[conf.log_count - 1]))
+    fprintf (stderr, "error: could not unlink: %s\n", old_logs[conf.log_count - 1]);
+
+  for (int i = conf.log_count - 1; i > 0; --i)
+    strcpy (old_logs[i], old_logs[i - 1]);
+
+  strcpy (old_logs[0], newfile);
+}
+
+int
 rotate ()
 {
   if (fclose (current_log))
@@ -327,7 +428,10 @@ rotate ()
   if (rename (current_log_name, set_prev_log_name ()))
     return 1;
 
-  return open_current_log (current_log_name);
+  log_count++;
+  evict_file (prev_log_name);
+
+  return 0;
 }
 
 void
@@ -336,6 +440,13 @@ free_globals ()
   free (BUF);
   free (conf.base_dir);
   free (prev_log_name);
+
+  if (conf.no_subdirs)
+    free (current_log_name);
+
+  for (int i = 0; i < log_count; i++)
+    free (old_logs[i]);
+  free (old_logs);
 }
 
 void
@@ -358,9 +469,10 @@ setup_globals ()
   if (conf.no_subdirs)
     {
       const size_t current_log_name_len = strlen (conf.arg) + strlen (LOG_EXT);
+      prev_log_name_len = current_log_name_len + TIME_FMT_BUF_SIZE + 1;
 
       current_log_name = malloc ((current_log_name_len + 1) * sizeof (char));
-      prev_log_name = malloc ((current_log_name_len + TIME_FMT_BUF_SIZE + 2) * sizeof (char));
+      prev_log_name = malloc ((prev_log_name_len + 1) * sizeof (char));
       if (! current_log_name || ! prev_log_name)
         error (EXIT_FAILURE, 0, "fatal: cannot malloc");
 
@@ -370,17 +482,21 @@ setup_globals ()
   else
     {
       current_log_name = "current.log";
-      prev_log_name = malloc ((TIME_FMT_BUF_SIZE + strlen (LOG_EXT) + 1) * sizeof (char));
+      prev_log_name_len = TIME_FMT_BUF_SIZE + strlen (LOG_EXT);
+      prev_log_name = malloc ((prev_log_name_len + 1) * sizeof (char));
       if (! prev_log_name)
         error (EXIT_FAILURE, 0, "fatal: cannot malloc");
     }
 
   // Open the log or create a new one.
   struct stat st;
-  if (stat (current_log_name, &st))
+  if (! stat (current_log_name, &st))
     error (EXIT_FAILURE, 0, "fatal: a current log already exist! Please remove it: %s", current_log_name);
   else if (open_current_log (current_log_name))
     error (EXIT_FAILURE, 0, "fatal: could not open log: %s", current_log_name);
+
+  // Evict initial logs
+  evict_setup ();
 
   // Select time function
   switch (conf.time_fmt)
@@ -407,6 +523,35 @@ main (const int argc, char *const *argv)
 
   setup_globals ();
 
+  bool is_new_line = true;
+  unsigned int n = 0;
+  struct timespec ts;
+
+  while (true)
+    {
+      if (fgets (BUF, conf.buf_size, stdin) == NULL)
+        goto exit;
+
+      if (is_new_line)
+        {
+          if (clock_gettime (CLOCK_REALTIME, &ts))
+            fprintf (stderr, "error: could not get time\n");
+          else
+            time_func (&ts);
+
+          n = strlen(time_fmt_buf);
+          fwrite (time_fmt_buf, sizeof (char), n, current_log);
+          fputc (' ', current_log);
+        }
+
+      n = strlen (BUF);
+      is_new_line = BUF[n - 1] == '\n';
+
+      fwrite (BUF, sizeof (char), n, current_log);
+    }
+
+exit:
+  rotate ();
   free_globals ();
   return EXIT_SUCCESS;
 }
