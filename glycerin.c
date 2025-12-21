@@ -586,12 +586,16 @@ setup_globals ()
     {
     case NONE:
       time_func = time_func_none;
+      break;
     case EPOCH:
       time_func = time_func_epoch;
+      break;
     case HUMAN_READABLE:
       time_func = time_func_hmr;
+      break;
     case HUMAN_READABLE_T:
       time_func = time_func_hmrt;
+      break;
     }
 }
 
