@@ -353,9 +353,9 @@ set_prev_log_name ()
 }
 
 int
-open_current_log (const char *filename)
+open_current_log ()
 {
-  current_log = fopen (filename, "w");
+  current_log = fopen (current_log_name, "w");
   if (! current_log)
     return 1;
 
@@ -434,6 +434,7 @@ evict_file (const char *newfile)
     strcpy (old_logs[i], old_logs[i - 1]);
 
   strcpy (old_logs[0], newfile);
+  log_count--;
 }
 
 int
@@ -469,6 +470,10 @@ free_globals ()
 void
 setup_globals ()
 {
+  conf.base_dir = base_dir ();
+  if (! conf.base_dir)
+    error (EXIT_FAILURE, 0, "fatal: could not determine directory for storing logs");
+
   // Allocate our buffer.
   BUF = malloc (conf.buf_size * sizeof (char));
   if (! BUF)
@@ -509,7 +514,7 @@ setup_globals ()
   struct stat st;
   if (! stat (current_log_name, &st))
     error (EXIT_FAILURE, 0, "fatal: a current log already exist! Please remove it: %s", current_log_name);
-  else if (open_current_log (current_log_name))
+  else if (open_current_log ())
     error (EXIT_FAILURE, 0, "fatal: could not open log: %s", current_log_name);
 
   // Evict initial logs
@@ -562,10 +567,6 @@ main (const int argc, char *const *argv)
 {
   parse_cli (argc, argv);
 
-  conf.base_dir = base_dir ();
-  if (! conf.base_dir)
-    error (EXIT_FAILURE, 0, "fatal: could not determine directory for storing logs");
-
   setup_globals ();
 
   setup_signaling ();
@@ -577,7 +578,14 @@ main (const int argc, char *const *argv)
   while (true)
     {
       if (fgets (BUF, conf.buf_size, stdin) == NULL)
-        break;
+        {
+          if (exit_sig)
+            goto exit;
+          if (rotate_sig)
+            goto rotate;
+          fprintf (stderr, "fatal: reading stdin\n");
+          break;
+        }
 
       if (is_new_line)
         {
@@ -596,19 +604,30 @@ main (const int argc, char *const *argv)
       fwrite (BUF, sizeof (char), n, current_log);
 
       // Exit if we are done with the current line.
+    exit:
       if (is_new_line && exit_sig)
         break;
 
       // Rotate if we are done with the current line.
+    rotate:
       if (is_new_line && rotate_sig)
         {
           rotate_sig = 0;
-          rotate ();
-          open_current_log (current_log_name);
+          if (rotate ())
+            {
+              fprintf (stderr, "fatal: could not rotate\n");
+              goto free;
+            }
+          if (open_current_log ())
+            {
+              fprintf (stderr, "fatal: could not open new log\n");
+              goto free;
+            }
         }
     }
 
   rotate ();
+free:
   free_globals ();
   return EXIT_SUCCESS;
 }
