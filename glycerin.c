@@ -1,12 +1,13 @@
-#include <bits/time.h>
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 #include <error.h>
@@ -86,6 +87,22 @@ char **old_logs = NULL;
 
 // Anzahl Logs exclusive des aktuellen Logs.
 unsigned int log_count = 0;
+
+// Signal vars.
+static volatile sig_atomic_t exit_sig = 0;
+static volatile sig_atomic_t rotate_sig = 0;
+
+static void
+exit_sig_hanlder (int signo)
+{
+  exit_sig = 1;
+}
+
+static void
+rotate_sig_hanlder (int signo)
+{
+  rotate_sig = 1;
+}
 
 // Ermittelt die aktuelle Uhrzeit.
 char *(*time_func) (const struct timespec *ts);
@@ -512,6 +529,34 @@ setup_globals ()
     }
 }
 
+void
+setup_signaling ()
+{
+  // Register handler for exiting.
+  struct sigaction exit_sa = { 0 };
+  exit_sa.sa_handler = exit_sig_hanlder;
+  sigemptyset (&exit_sa.sa_mask);
+  exit_sa.sa_flags = 0;
+
+  if (sigaction (SIGTERM, &exit_sa, NULL) == -1 || sigaction (SIGINT, &exit_sa, NULL) == -1)
+    error (EXIT_FAILURE, 0, "fatal: could not register termination handlers");
+
+  // Register handler for time based rotation.
+  struct sigaction rotate_sa = { 0 };
+  rotate_sa.sa_handler = rotate_sig_hanlder;
+  sigemptyset (&rotate_sa.sa_mask);
+  rotate_sa.sa_flags = 0;
+
+  if (sigaction (SIGALRM, &rotate_sa, NULL))
+    error (EXIT_FAILURE, 0, "fatal: could not register rotation handler");
+
+  // Register the signal timer.
+  struct timeval tv = { .tv_sec = conf.log_age, .tv_usec = 0 };
+  struct itimerval itv = { .it_value = tv, .it_interval = tv };
+  if (setitimer (ITIMER_REAL, &itv, NULL) == -1)
+    error (EXIT_FAILURE, 0, "fatal: could not setup rotation timer");
+}
+
 int
 main (const int argc, char *const *argv)
 {
@@ -523,6 +568,8 @@ main (const int argc, char *const *argv)
 
   setup_globals ();
 
+  setup_signaling ();
+
   bool is_new_line = true;
   unsigned int n = 0;
   struct timespec ts;
@@ -530,7 +577,7 @@ main (const int argc, char *const *argv)
   while (true)
     {
       if (fgets (BUF, conf.buf_size, stdin) == NULL)
-        goto exit;
+        break;
 
       if (is_new_line)
         {
@@ -539,8 +586,7 @@ main (const int argc, char *const *argv)
           else
             time_func (&ts);
 
-          n = strlen(time_fmt_buf);
-          fwrite (time_fmt_buf, sizeof (char), n, current_log);
+          fwrite (time_fmt_buf, sizeof (char), strlen (time_fmt_buf), current_log);
           fputc (' ', current_log);
         }
 
@@ -548,9 +594,20 @@ main (const int argc, char *const *argv)
       is_new_line = BUF[n - 1] == '\n';
 
       fwrite (BUF, sizeof (char), n, current_log);
+
+      // Exit if we are done with the current line.
+      if (is_new_line && exit_sig)
+        break;
+
+      // Rotate if we are done with the current line.
+      if (is_new_line && rotate_sig)
+        {
+          rotate_sig = 0;
+          rotate ();
+          open_current_log (current_log_name);
+        }
     }
 
-exit:
   rotate ();
   free_globals ();
   return EXIT_SUCCESS;
