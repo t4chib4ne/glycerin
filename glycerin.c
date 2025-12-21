@@ -11,6 +11,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <error.h>
+#include <errno.h>
 
 // Byte Groessen
 #define KiB 1024
@@ -81,6 +82,7 @@ size_t prev_log_name_len = 0;
 // `time_func`
 #define TIME_FMT_BUF_SIZE 32
 char time_fmt_buf[TIME_FMT_BUF_SIZE] = { 0 };
+size_t time_fmt_buf_len = 0;
 
 // Dateinamen der alten Logs.
 char **old_logs = NULL;
@@ -110,13 +112,20 @@ char *(*time_func) (const struct timespec *ts);
 char *
 time_func_none (const struct timespec *ts)
 {
-  return NULL;
+  return time_fmt_buf;
 }
 
 char *
 time_func_epoch (const struct timespec *ts)
 {
-  snprintf (time_fmt_buf, TIME_FMT_BUF_SIZE, "%lu%03ld", ts->tv_sec, ts->tv_nsec / 1000000L);
+  size_t n = snprintf (time_fmt_buf, TIME_FMT_BUF_SIZE, "%lu%03ld", ts->tv_sec, ts->tv_nsec / 1000000L);
+  if (n >= TIME_FMT_BUF_SIZE)
+    {
+      fprintf (stderr, "time_func_epoch: cannot fit time into format\n");
+      return NULL;
+    }
+
+  time_fmt_buf_len = n;
   return time_fmt_buf;
 }
 
@@ -124,14 +133,27 @@ char *
 time_func_fmt (const struct timespec *ts, const char *fmt)
 {
   struct tm tp;
-  if (! gmtime_r (&ts->tv_sec, &tp))
-    error (EXIT_FAILURE, 0, "gmtime_r not working");
+  if (gmtime_r (&ts->tv_sec, &tp) == NULL)
+    {
+      perror ("gmtime_r");
+      return NULL;
+    }
 
-  size_t n = strftime (time_fmt_buf, sizeof (time_fmt_buf), fmt, &tp);
-  if (! n)
-    error (EXIT_FAILURE, 0, "strftime not working");
+  size_t n = strftime (time_fmt_buf, TIME_FMT_BUF_SIZE, fmt, &tp);
+  if (n == 0)
+    {
+      fprintf (stderr, "time_func_fmt: format for strftime too long\n");
+      return NULL;
+    }
 
-  snprintf (time_fmt_buf + n, sizeof (time_fmt_buf) - n, ".%05ld", ts->tv_nsec / 1000000L);
+  size_t m = snprintf (time_fmt_buf + n, TIME_FMT_BUF_SIZE - n, ".%05ld", ts->tv_nsec / 1000000L);
+  if (m >= TIME_FMT_BUF_SIZE - n)
+    {
+      fprintf (stderr, "time_func_fmt: cannot fit milliseconds into format\n");
+      return NULL;
+    }
+
+  time_fmt_buf_len = n + m;
   return time_fmt_buf;
 }
 
@@ -175,8 +197,8 @@ base_dir ()
     {
       const size_t s_len = strlen ("/var/log/") + strlen (conf.arg);
       char *s = malloc ((s_len + 1) * sizeof (char));
-      if (! s)
-        error (EXIT_FAILURE, 0, "cannot malloc");
+      if (s == NULL)
+        error (EXIT_FAILURE, 0, "%s", strerror (errno));
       strcat (s, "/var/log/");
       strcat (s, conf.arg);
       return s;
@@ -198,8 +220,8 @@ base_dir ()
   const size_t s_len = strlen (base_dir) + needs_slash + strlen (subdir) + app_dir_len;
 
   char *s = malloc ((s_len + 1) * sizeof (char));
-  if (! s)
-    error (EXIT_FAILURE, 0, "cannot malloc");
+  if (s == NULL)
+    error (EXIT_FAILURE, 0, "%s", strerror (errno));
 
   strcpy (s, base_dir);
   if (needs_slash)
@@ -225,14 +247,12 @@ print_help_and_exit (const char *arg0, int status)
 unsigned long
 parse_ulong (const char *s, const char optopt)
 {
+  errno = 0;
   char *end = NULL;
   unsigned long l = strtoul (s, &end, 10);
 
   if (errno != 0)
-    {
-      errno = 0;
-      error (EXIT_FAILURE, 0, "invalid value for option: %c", optopt);
-    }
+    error (EXIT_FAILURE, 0, "invalid value for option %c: %s", optopt, strerror (errno));
 
   return l;
 }
@@ -253,12 +273,12 @@ parse_cli (int argc, char *const *argv)
         case 'b':
           conf.buf_size = parse_ulong (optarg, optopt);
           if (! conf.buf_size)
-            error (EXIT_FAILURE, 0, "fatal: buffer size must be greater than zero");
+            error (EXIT_FAILURE, 0, "buffer size must be greater than zero");
           break;
         case 's':
           conf.log_size = parse_ulong (optarg, optopt);
           if (! conf.log_size)
-            error (EXIT_FAILURE, 0, "fatal: log file before rotating must be greater than zero");
+            error (EXIT_FAILURE, 0, "log file before rotating must be greater than zero");
           break;
         case 'a':
           conf.log_age = parse_ulong (optarg, optopt);
@@ -266,7 +286,7 @@ parse_cli (int argc, char *const *argv)
         case 'n':
           l = parse_ulong (optarg, optopt);
           if (l > INT_MAX)
-            error (EXIT_FAILURE, 0, "fatal: you really want to keep that many logs?");
+            error (EXIT_FAILURE, 0, "You really want to keep that many logs?");
           conf.log_count = (int) l;
           break;
         case 'd':
@@ -279,7 +299,7 @@ parse_cli (int argc, char *const *argv)
           print_help_and_exit (argv[0], EXIT_FAILURE);
           break;
         case ':':
-          error (EXIT_FAILURE, 0, "options is missing a value: %c", optopt);
+          error (EXIT_FAILURE, 0, "option is missing a value: %c", optopt);
         case '?':
           error (EXIT_FAILURE, 0, "unknown option: %c\nsee %s -h for help", optopt, argv[0]);
         }
@@ -323,6 +343,7 @@ mkdirp (char *pathname)
 
       if (*pathname != '\0' && mkdir (pathname, 0755) == -1)
         {
+          perror (pathname);
           *slash_ptr = '/';
           return -1;
         }
@@ -357,15 +378,21 @@ open_current_log ()
 {
   current_log = fopen (current_log_name, "w");
   if (! current_log)
-    return 1;
+    {
+      perror (current_log_name);
+      return -1;
+    }
 
   if (clock_gettime (CLOCK_REALTIME, &current_log_birth))
-    return 1;
+    {
+      perror ("clock_gettime");
+      return -1;
+    }
 
   return 0;
 }
 
-int
+void
 evict_setup ()
 {
   DIR *d;
@@ -377,7 +404,7 @@ evict_setup ()
 
   old_logs = calloc (conf.log_count, sizeof (*old_logs));
   if (! old_logs)
-    return 1;
+    error (EXIT_FAILURE, 0, "%s", strerror (errno));
 
   // Read all log files.
   while ((de = readdir (d)) != NULL)
@@ -404,21 +431,19 @@ evict_setup ()
   if (idx <= conf.log_count)
     {
       log_count = idx;
-      return 0;
+      return;
     }
 
   // Delete logs that are too many.
   for (int i = conf.log_count; i < idx; i++)
     {
       if (unlink (old_logs[i]))
-        fprintf (stderr, "error: could not unlink: %s\n", old_logs[i]);
+        error (EXIT_FAILURE, 0, "cannot delete old log: %s: %s", old_logs[i], strerror (errno));
       free (old_logs[i]);
     }
 
   // Shrink down log tracker.
   old_logs = realloc (old_logs, conf.log_count * sizeof (*old_logs));
-
-  return 0;
 }
 
 void
@@ -427,8 +452,11 @@ evict_file (const char *newfile)
   if (log_count <= conf.log_count)
     return;
 
+  // We continue if unlink fails.
+  // During current execution this file will
+  // be ignored.
   if (unlink (old_logs[conf.log_count - 1]))
-    fprintf (stderr, "error: could not unlink: %s\n", old_logs[conf.log_count - 1]);
+    fprintf (stderr, "cannot unlink: %s: %s\n", old_logs[conf.log_count - 1], strerror (errno));
 
   for (int i = conf.log_count - 1; i > 0; --i)
     strcpy (old_logs[i], old_logs[i - 1]);
@@ -441,10 +469,16 @@ int
 rotate ()
 {
   if (fclose (current_log))
-    return 1;
+    {
+      perror ("fclose");
+      return -1;
+    }
 
   if (rename (current_log_name, set_prev_log_name ()))
-    return 1;
+    {
+      perror ("rename");
+      return -1;
+    }
 
   log_count++;
   evict_file (prev_log_name);
@@ -472,19 +506,19 @@ setup_globals ()
 {
   conf.base_dir = base_dir ();
   if (! conf.base_dir)
-    error (EXIT_FAILURE, 0, "fatal: could not determine directory for storing logs");
+    error (EXIT_FAILURE, 0, "could not determine directory for storing logs");
 
   // Allocate our buffer.
   BUF = malloc (conf.buf_size * sizeof (char));
   if (! BUF)
-    error (EXIT_FAILURE, 0, "fatal: could not allocate buffer");
+    error (EXIT_FAILURE, 0, "allocating main buffer: %s", strerror (errno));
 
   // Switch cwd to the logging base dir,
   // create it if it does not exist.
   if (mkdirp (conf.base_dir) == -1)
-    error (EXIT_FAILURE, 0, "fatal: could not create logdir");
+    exit (EXIT_FAILURE);
   if (chdir (conf.base_dir) == -1)
-    error (EXIT_FAILURE, 0, "fatal: cannot chdir to %s", conf.base_dir);
+    error (EXIT_FAILURE, 0, "cannot chdir to %s: %s", conf.base_dir, strerror (errno));
 
   // The current log file name depends on,
   // whether we use subdirs or not.
@@ -496,7 +530,7 @@ setup_globals ()
       current_log_name = malloc ((current_log_name_len + 1) * sizeof (char));
       prev_log_name = malloc ((prev_log_name_len + 1) * sizeof (char));
       if (! current_log_name || ! prev_log_name)
-        error (EXIT_FAILURE, 0, "fatal: cannot malloc");
+        error (EXIT_FAILURE, 0, "%s", strerror (errno));
 
       strcpy (current_log_name, conf.arg);
       strcat (current_log_name, LOG_EXT);
@@ -507,18 +541,15 @@ setup_globals ()
       prev_log_name_len = TIME_FMT_BUF_SIZE + strlen (LOG_EXT);
       prev_log_name = malloc ((prev_log_name_len + 1) * sizeof (char));
       if (! prev_log_name)
-        error (EXIT_FAILURE, 0, "fatal: cannot malloc");
+        error (EXIT_FAILURE, 0, "%s", strerror (errno));
     }
 
   // Open the log or create a new one.
   struct stat st;
   if (! stat (current_log_name, &st))
-    error (EXIT_FAILURE, 0, "fatal: a current log already exist! Please remove it: %s", current_log_name);
+    error (EXIT_FAILURE, 0, "log directory already in use");
   else if (open_current_log ())
-    error (EXIT_FAILURE, 0, "fatal: could not open log: %s", current_log_name);
-
-  // Evict initial logs
-  evict_setup ();
+    exit (EXIT_FAILURE);
 
   // Select time function
   switch (conf.time_fmt)
@@ -544,7 +575,12 @@ setup_signaling ()
   exit_sa.sa_flags = 0;
 
   if (sigaction (SIGTERM, &exit_sa, NULL) == -1 || sigaction (SIGINT, &exit_sa, NULL) == -1)
-    error (EXIT_FAILURE, 0, "fatal: could not register termination handlers");
+    error (EXIT_FAILURE, 0, "term handlers: %s", strerror (errno));
+
+  // Logs shall never be rotated based on
+  // time.
+  if (conf.log_age == 0)
+    return;
 
   // Register handler for time based rotation.
   struct sigaction rotate_sa = { 0 };
@@ -553,13 +589,13 @@ setup_signaling ()
   rotate_sa.sa_flags = 0;
 
   if (sigaction (SIGALRM, &rotate_sa, NULL))
-    error (EXIT_FAILURE, 0, "fatal: could not register rotation handler");
+    error (EXIT_FAILURE, 0, "rotation handler: %s", strerror (errno));
 
   // Register the signal timer.
   struct timeval tv = { .tv_sec = conf.log_age, .tv_usec = 0 };
   struct itimerval itv = { .it_value = tv, .it_interval = tv };
   if (setitimer (ITIMER_REAL, &itv, NULL) == -1)
-    error (EXIT_FAILURE, 0, "fatal: could not setup rotation timer");
+    error (EXIT_FAILURE, 0, "cannot setup timer: %s", strerror (errno));
 }
 
 int
@@ -568,6 +604,8 @@ main (const int argc, char *const *argv)
   parse_cli (argc, argv);
 
   setup_globals ();
+
+  evict_setup ();
 
   setup_signaling ();
 
