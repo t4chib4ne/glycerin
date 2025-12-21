@@ -169,6 +169,14 @@ time_func_hmrt (const struct timespec *ts)
   return time_func_fmt (ts, "%Y-%m-%dT%H:%M:%S");
 }
 
+char *
+pad_time_fmt_buf ()
+{
+  time_fmt_buf[time_fmt_buf_len++] = ' ';
+  time_fmt_buf[time_fmt_buf_len] = '\0';
+  return time_fmt_buf;
+}
+
 bool
 has_suffix (const char *s, const char *suffix)
 {
@@ -393,7 +401,7 @@ open_current_log ()
 }
 
 void
-evict_setup ()
+setup_eviction ()
 {
   DIR *d;
   struct dirent *de;
@@ -474,6 +482,12 @@ rotate ()
       return -1;
     }
 
+  if (chmod (current_log_name, S_IRUSR | S_IRGRP | S_IROTH))
+    {
+      perror ("chmod");
+      return -1;
+    }
+
   if (rename (current_log_name, set_prev_log_name ()))
     {
       perror ("rename");
@@ -484,6 +498,22 @@ rotate ()
   evict_file (prev_log_name);
 
   return 0;
+}
+
+size_t
+fwrite_with_retry (const void *ptr, size_t size, size_t n, FILE *s)
+{
+  errno = 0;
+  size_t total = 0;
+
+  while (total < n)
+    {
+      total += fwrite (ptr + total, size, n, s);
+      if (errno != 0 && errno != EINTR)
+        return total;
+    }
+
+  return total;
 }
 
 void
@@ -601,13 +631,17 @@ setup_signaling ()
 int
 main (const int argc, char *const *argv)
 {
+  // Setup, the program may fail here immediatly.
   parse_cli (argc, argv);
-
   setup_globals ();
-
-  evict_setup ();
-
+  setup_eviction ();
   setup_signaling ();
+
+  // Setup is done. From here on out the programm
+  // shall never terminate due to an error caused by
+  // its own functions.
+  // If calls related to io fail the program may terminate
+  // as it cannot uphold its purpose.
 
   bool is_new_line = true;
   unsigned int n = 0;
@@ -617,55 +651,78 @@ main (const int argc, char *const *argv)
     {
       if (fgets (BUF, conf.buf_size, stdin) == NULL)
         {
-          if (exit_sig)
-            goto exit;
+          if (errno != EINTR)
+            break;
+          errno = 0;
+
+          // We were interrupted to rotate the logs.
+          // This gets delayed until we are done reading the
+          // current line, so we use `goto` here.
           if (rotate_sig)
             goto rotate;
-          fprintf (stderr, "fatal: reading stdin\n");
-          break;
+
+          // We were interrupted to terminate ourself.
+          // We cannot wait for out monitored process
+          // because we don't know when it will terminate,
+          // so we terminate immediatly.
+          if (exit_sig)
+            break;
         }
 
-      if (is_new_line)
+      if (conf.time_fmt != NONE && is_new_line)
         {
           if (clock_gettime (CLOCK_REALTIME, &ts))
-            fprintf (stderr, "error: could not get time\n");
+            {
+              fprintf (stderr, "cannot get time: %s\n", strerror (errno));
+              goto after_time_prefix;
+            }
           else
-            time_func (&ts);
+            {
+              if (time_func (&ts) == NULL)
+                goto after_time_prefix;
+            }
 
-          fwrite (time_fmt_buf, sizeof (char), strlen (time_fmt_buf), current_log);
-          fputc (' ', current_log);
+          pad_time_fmt_buf ();
+          if (fwrite_with_retry (time_fmt_buf, sizeof (char), time_fmt_buf_len, current_log) != time_fmt_buf_len)
+            {
+              perror ("writing to log");
+              break;
+            }
         }
 
+      // This label is used to skip past
+      // the timestamp creation which might
+      // have failed due to a non-io error.
+    after_time_prefix:
+
+      // Tell the next itration that it needs
+      // to add a timestamp.
       n = strlen (BUF);
       is_new_line = BUF[n - 1] == '\n';
 
-      fwrite (BUF, sizeof (char), n, current_log);
+      if (fwrite_with_retry (BUF, sizeof (char), n, current_log) != n)
+        {
+          perror ("writing to log");
+          break;
+        }
 
-      // Exit if we are done with the current line.
-    exit:
-      if (is_new_line && exit_sig)
-        break;
-
-      // Rotate if we are done with the current line.
     rotate:
+      // Rotate if we are done with the current line.
       if (is_new_line && rotate_sig)
         {
           rotate_sig = 0;
-          if (rotate ())
+          if (rotate () == -1 || open_current_log () == -1)
             {
-              fprintf (stderr, "fatal: could not rotate\n");
-              goto free;
-            }
-          if (open_current_log ())
-            {
-              fprintf (stderr, "fatal: could not open new log\n");
-              goto free;
+              free_globals ();
+              return EXIT_FAILURE;
             }
         }
+
+      if (exit_sig)
+        break;
     }
 
   rotate ();
-free:
   free_globals ();
   return EXIT_SUCCESS;
 }
