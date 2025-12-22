@@ -411,6 +411,8 @@ open_current_log ()
       return -1;
     }
 
+  current_log_size = 0;
+
   return 0;
 }
 
@@ -713,6 +715,7 @@ main (const int argc, char *const *argv)
               perror ("writing to log");
               break;
             }
+          current_log_size += time_fmt_buf_len;
         }
 
       // This label is used to skip past
@@ -730,10 +733,15 @@ main (const int argc, char *const *argv)
           perror ("writing to log");
           break;
         }
+      current_log_size += n;
+
+      // Flush so users can tail our log.
+      if (is_new_line)
+        fflush (current_log);
 
     rotate:
       // Rotate if we are done with the current line.
-      if (is_new_line && rotate_sig)
+      if (is_new_line && (rotate_sig || current_log_size >= conf.log_size))
         {
           rotate_sig = 0;
           if (rotate () == -1 || open_current_log () == -1)
