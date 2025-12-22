@@ -198,51 +198,65 @@ log_name_cmp (const void *lhs, const void *rhs)
 }
 
 char *
-base_dir ()
+get_base_dir ()
 {
   // We are root.
   if (getuid () == 0)
+    return "/var/log/";
+
+  // We are not root.
+  char *env_dir = getenv ("XDG_DATA_HOME");
+  const char *env_subdir = "glycerin/logs/";
+  if (! env_dir)
     {
-      const size_t s_len = strlen ("/var/log/") + strlen (conf.arg);
-      char *s = malloc ((s_len + 1) * sizeof (char));
-      if (s == NULL)
-        error (EXIT_FAILURE, 0, "%s", strerror (errno));
-      strcat (s, "/var/log/");
-      strcat (s, conf.arg);
-      return s;
+      env_dir = getenv ("HOME");
+      env_subdir = ".local/share/glycerin/logs/";
     }
 
-  // We are not root and determine our
-  // base dir via the env.
-  char *base_dir = getenv ("XDG_DATA_HOME");
-  const char *subdir = "glycerin/";
-  if (! base_dir)
-    {
-      base_dir = getenv ("HOME");
-      subdir = ".local/share/glycerin/logs/";
-    }
+  const size_t env_dir_len = strlen (env_dir);
+  const int needs_slash = env_dir[env_dir_len - 1] == '/' ? 0 : 1;
 
+  char *base_dir = malloc ((env_dir_len + needs_slash + strlen (env_subdir) + 1) * sizeof (char));
+  if (base_dir == NULL)
+    error (EXIT_FAILURE, 0, "%s", strerror (errno));
+
+  strcpy (base_dir, env_dir);
+  if (needs_slash)
+    strcat (base_dir, "/");
+  strcat (base_dir, env_subdir);
+
+  return base_dir;
+}
+
+void
+free_base_dir (char *base_dir)
+{
+  if (getuid () != 0)
+    free (base_dir);
+}
+
+char *
+get_log_dir (const char *base_dir)
+{
   const size_t app_dir_len = conf.no_subdirs ? 0 : strlen (conf.arg) + 1;
   const size_t base_dir_len = strlen (base_dir);
   const int needs_slash = base_dir[base_dir_len - 1] == '/' ? 0 : 1;
-  const size_t s_len = strlen (base_dir) + needs_slash + strlen (subdir) + app_dir_len;
+  const size_t log_dir_len = base_dir_len + needs_slash + app_dir_len;
 
-  char *s = malloc ((s_len + 1) * sizeof (char));
-  if (s == NULL)
+  char *log_dir = malloc ((log_dir_len + 1) * sizeof (char));
+  if (log_dir == NULL)
     error (EXIT_FAILURE, 0, "%s", strerror (errno));
 
-  strcpy (s, base_dir);
+  strcpy (log_dir, base_dir);
   if (needs_slash)
-    strcat (s, "/");
-  strcat (s, subdir);
-
+    strcat (log_dir, "/");
   if (app_dir_len)
     {
-      strcat (s, conf.arg);
-      strcat (s, "/");
+      strcat (log_dir, conf.arg);
+      strcat (log_dir, "/");
     }
 
-  return s;
+  return log_dir;
 }
 
 void
@@ -520,7 +534,6 @@ void
 free_globals ()
 {
   free (BUF);
-  free (conf.base_dir);
   free (prev_log_name);
 
   if (conf.no_subdirs)
@@ -534,21 +547,29 @@ free_globals ()
 void
 setup_globals ()
 {
-  conf.base_dir = base_dir ();
-  if (! conf.base_dir)
-    error (EXIT_FAILURE, 0, "could not determine directory for storing logs");
-
   // Allocate our buffer.
   BUF = malloc (conf.buf_size * sizeof (char));
   if (! BUF)
     error (EXIT_FAILURE, 0, "allocating main buffer: %s", strerror (errno));
 
-  // Switch cwd to the logging base dir,
+  // Calculate the directory for logging
+  // the named application.
+  bool base_dir_maybe_free = false;
+  char *base_dir = conf.base_dir;
+  if ((base_dir_maybe_free = base_dir == NULL))
+    base_dir = get_base_dir ();
+  char *log_dir = get_log_dir (base_dir);
+  if (base_dir_maybe_free)
+    free_base_dir (base_dir);
+
+  // Switch cwd to the logging dir,
   // create it if it does not exist.
-  if (mkdirp (conf.base_dir) == -1)
+  if (mkdirp (log_dir) == -1)
     exit (EXIT_FAILURE);
-  if (chdir (conf.base_dir) == -1)
-    error (EXIT_FAILURE, 0, "cannot chdir to %s: %s", conf.base_dir, strerror (errno));
+  if (chdir (log_dir) == -1)
+    error (EXIT_FAILURE, 0, "cannot chdir to %s: %s", log_dir, strerror (errno));
+
+  free (log_dir);
 
   // The current log file name depends on,
   // whether we use subdirs or not.
