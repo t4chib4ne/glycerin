@@ -322,8 +322,10 @@ parse_cli (int argc, char *const *argv)
           break;
         case ':':
           error (EXIT_FAILURE, 0, "option is missing a value: %c", optopt);
+          break; // makes the compiler happy
         case '?':
           error (EXIT_FAILURE, 0, "unknown option: %c\nsee %s -h for help", optopt, argv[0]);
+          break; // makes the compiler happy
         }
     }
 
@@ -332,7 +334,7 @@ parse_cli (int argc, char *const *argv)
   else
     conf.arg = argv[argc - 1];
 
-  for (int i = 0; i < strlen (conf.arg); ++i)
+  for (unsigned int i = 0; i < strlen (conf.arg); ++i)
     if (conf.arg[i] == '/' || conf.arg[i] == '.')
       error (EXIT_FAILURE, 0, "APPNAME contains unallowed characters");
 
@@ -424,7 +426,7 @@ setup_eviction ()
   d = opendir (".");
 
   size_t size = conf.log_count;
-  int idx = 0;
+  unsigned int idx = 0;
 
   old_logs = calloc (conf.log_count, sizeof (*old_logs));
   if (! old_logs)
@@ -459,7 +461,7 @@ setup_eviction ()
     }
 
   // Delete logs that are too many.
-  for (int i = conf.log_count; i < idx; i++)
+  for (unsigned int i = conf.log_count; i < idx; i++)
     {
       if (unlink (old_logs[i]))
         error (EXIT_FAILURE, 0, "cannot delete old log: %s: %s", old_logs[i], strerror (errno));
@@ -541,7 +543,7 @@ free_globals ()
   if (conf.no_subdirs)
     free (current_log_name);
 
-  for (int i = 0; i < log_count; i++)
+  for (unsigned int i = 0; i < log_count; i++)
     free (old_logs[i]);
   free (old_logs);
 }
