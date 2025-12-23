@@ -1,3 +1,6 @@
+// Copyright 2025 t4chib4ne
+// Distributed under the terms of the GNU General Public License v2
+
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
