@@ -13,18 +13,18 @@
 #include <error.h>
 #include <errno.h>
 
-// Byte Groessen
+// byte sizes
 #define KiB 1024
 #define MiB 1024 * 1024
 
-// Zeit Groessen
+// time slices
 #define DAY 24 * 60 * 60
 
-// Datei Konstanten
+// logfile extension
 #define LOG_EXT ".log"
 
-// Die verfuegbaren Formate der Zeitangabe einer
-// Logzeiele.
+// Available formats for time information of
+// a line in the log.
 typedef enum
 {
   NONE,
@@ -33,8 +33,8 @@ typedef enum
   HUMAN_READABLE_T
 } time_fmt_t;
 
-// In diesem Struct werden alle Konfigurationen
-// und Eigenschaften des Programms gespeichert.
+// Saves all command line configuration of
+// the program.
 struct config
 {
   char *arg;
@@ -47,7 +47,7 @@ struct config
   bool no_subdirs;
 };
 
-// Globale Instanz der Config.
+// instance of the configuration
 struct config conf = {
   .arg = NULL,
   .time_fmt = NONE,
@@ -59,35 +59,26 @@ struct config conf = {
   .no_subdirs = false
 };
 
-// Buffer fuer das Einlesen von stdin.
+// buffer for stdin
 char *BUF = NULL;
 
-// Datei des aktuellen Log in die geschrieben
-// wird.
+// information about the currently open log
 char *current_log_name = NULL;
 FILE *current_log = NULL;
-
-// Speichert die Laenge des Logs.
 size_t current_log_size = 0;
-
-// Speichert das Erstellungsdatum des Logs.
 struct timespec current_log_birth;
 
-// Pfad zum vorherigen Log.
+// information about the previous log
 char *prev_log_name = NULL;
 size_t prev_log_name_len = 0;
 
-// Buffer in dem sich die aktuelle Uhrzeit im
-// gewaehlten Format befindet nach Aufruf von
-// `time_func`
+// destination of the time_func
 #define TIME_FMT_BUF_SIZE 32
 char time_fmt_buf[TIME_FMT_BUF_SIZE] = { 0 };
 size_t time_fmt_buf_len = 0;
 
-// Dateinamen der alten Logs.
+// tracking of old logs
 char **old_logs = NULL;
-
-// Anzahl Logs exclusive des aktuellen Logs.
 unsigned int log_count = 0;
 
 // Signal vars.
@@ -106,7 +97,7 @@ rotate_sig_hanlder (int signo)
   rotate_sig = 1;
 }
 
-// Ermittelt die aktuelle Uhrzeit.
+// formats the given time
 char *(*time_func) (const struct timespec *ts);
 
 char *
@@ -725,7 +716,7 @@ main (const int argc, char *const *argv)
       // have failed due to a non-io error.
     after_time_prefix:
 
-      // Tell the next itration that it needs
+      // Tell the next iteration that it needs
       // to add a timestamp.
       n = strlen (BUF);
       is_new_line = BUF[n - 1] == '\n';
