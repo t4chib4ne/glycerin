@@ -254,7 +254,7 @@ void
 print_help_and_exit (const char *arg0, int status)
 {
   printf ("Usage: %s [OPTIONS] APPNAME\n\n", arg0);
-  printf ("Glycerin is a simple utility for logging a single application.\n\n");
+  printf ("glycerin is a simple utility for logging a single application.\n\n");
   printf ("Options:\n");
   printf ("  -a u64 : maximum log file age in seconds\n");
   printf ("  -b u64 : size of the stdin buffer in bytes\n");

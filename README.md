@@ -1,6 +1,6 @@
 # glycerin
 
-Glycerin is a simple utility for logging a single application.
+glycerin is a simple utility for logging a single application.
 
 ## Notice
 
@@ -47,7 +47,7 @@ Please see the output of:
 $ glycerin -h
 Usage: glycerin [OPTIONS] APPNAME
 
-Glycerin is a simple utility for logging a single application.
+glycerin is a simple utility for logging a single application.
 
 Options:
   -a u64 : maximum log file age in seconds
@@ -65,7 +65,7 @@ Or read the man-page.
 
 Please take a look at the [nitro README](https://github.com/leahneukirchen/nitro/blob/master/README.md) first.
 
-glycerin is designed to be used as a parametrized service. Create a `glycerin@` and either symlink the glycerin binary to `run` (if you are OK with the defaults) or create a `run` like so:
+glycerin is designed to be used as a parametrized service. Create a `glycerin@` service and either symlink the glycerin binary to `run` (if you are OK with the defaults) or create a `run` like so:
 
 ```bash
 #!/bin/bash
