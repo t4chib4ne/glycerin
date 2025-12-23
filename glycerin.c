@@ -327,7 +327,7 @@ parse_cli (int argc, char *const *argv)
         }
     }
 
-  if (optind != argc - 1)
+  if (optind != argc - 1 || strlen (argv[argc - 1]) == 0)
     error (EXIT_FAILURE, 0, "no APPNAME given");
   else
     conf.arg = argv[argc - 1];
