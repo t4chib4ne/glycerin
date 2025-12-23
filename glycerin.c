@@ -253,7 +253,16 @@ get_log_dir (const char *base_dir)
 void
 print_help_and_exit (const char *arg0, int status)
 {
-  printf ("Usage: %s [OPTIONS] APPNAME\n", arg0);
+  printf ("Usage: %s [OPTIONS] APPNAME\n\n", arg0);
+  printf ("Glycerin is a simple utility for logging a single application.\n\n");
+  printf ("Options:\n");
+  printf ("  -a u64 : maximum log file age in seconds\n");
+  printf ("  -b u64 : size of the stdin buffer in bytes\n");
+  printf ("  -d DIR : path for storing log files\n");
+  printf ("  -f     : do not store log files in a subdirecotry\n");
+  printf ("  -n u64 : maximum number of log files to keep\n");
+  printf ("  -s u64 : maximum log file size in bytes\n");
+  printf ("  -t     : cycle through timestamp formats for every line\n");
   exit (status);
 }
 
