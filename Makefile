@@ -1,5 +1,14 @@
-all:
-	clang glycerin.c -o glycerin
+CFLAGS=-O2 -Wall -Wno-unused-parameter -Wextra -Wwrite-strings
+
+ALL=glycerin
+
+all: $(ALL)
+
+glycerin: glycerin.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 debug:
-	clang -g glycerin.c -o glycerin
+	$(MAKE) all CFLAGS="$(CFLAGS) -g -Og -DDEBUG -D_FORTIFY_SOURCE=2"
+
+clean:
+	rm $(ALL)
