@@ -1,0 +1,56 @@
+.TH GLYCERIN 8
+.SH NAME
+glycerin \- collect and manage output of single application as logs
+.SH SYNOPSIS
+.B glycerin
+[\fIOPTION\fR]...
+.IR appname
+.SH DESCRIPTION
+.B glycerin
+collects output of a single application via stdin and manages it as logs in a designated directory. Logs are automatically rotated by time or file size and kept up to a certain number.
+.PP
+If running rootful \fBglycerin\fR will use \fI/var/log\fR as a base directory. Otherwise \fBglycerin\fR looks for XDG_DATA_DIR or if empty \fI~/.local/share\fR and creates the subdirectories \fIglycerin/logs\fR.
+.PP
+The name of a log file reflects the state of the log. There is a single \fIcurrent.log\fR file in the log directory if there is a \fBglycerin\fR instance running for this application. Other logs are named by the time they were created in second exact UNIX epoch and with the \fI.log\fR extension. Rotated log files also have their permissions changed to \fB0444\fR.
+.SH APPNAME
+\fIappname\fR is the name of the logged application which will be used for managing the files as multiple instances of \fBglycerin\fR can use the same base directory for storing logs. The characters '/' and '.' are not allowed.
+.SH OPTIONS
+.TP
+.BR \-a ", " \-\-max\-log\-age =\fISECONDS\fR
+Maximum age of a log file before it is rotated in seconds. Default is one day.
+.TP
+.BR \-b ", " \-\-buffer\-size =\fIBYTES\fR
+Size of the buffer used for reading stdin. Default is one KiB.
+.TP
+.BR \-d ", " \-\-log\-directory =\fIDIRECTORY\fR
+Specific base directory to store logs in.
+.TP
+.BR \-f ", " \-\-files\-only
+Do not create a subdirectory for the logged application. Instead add \fIappname\fR to the name of the log files.
+.TP
+.BR \-n ", " \-\-log\-number =\fILOGS\fR
+The maximum amount of logs kept before deletion. During runtime \fIcurrent.log\fR does not count. Default are seven.
+.TP
+.BR \-s ", " \-\-max\-log\-size =\fIBYTES\fR
+The maximum size of a log before it gets rotated. After rotation the log file may be larger to avoid cutting off the last line. Default is one MiB.
+.TP
+.BR \-t ", " \-\-time\-format
+Prepend a timestamp to every line. The amount of times this option was specified selects the \fBTIMEFORMAT\fR.
+.TP
+.BR \-V ", " \-\-version
+Print the application version and exit.
+.SH TIMEFORMATS
+.TP
+.BR "0: NONE"
+nothing is prepended,
+.TP 
+.BR "1: EPOCH"
+UNIX epoch with 5 nanosecond precision is prepended,
+.TP
+.BR "2: HUMAN_READABLE"
+prepends timestamps like "2024-03-26_13:37:69.12345",
+.TP
+.BR "3: HUMAN_READABLE_T"
+prepends timestamps like "2024-03-26T13:37:69.12345".
+.SH "SEE ALSO"
+\fBnitro\fP(8)
