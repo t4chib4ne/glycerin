@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <error.h>
 #include <errno.h>
+#include <getopt.h>
 
 // byte sizes
 #define KiB 1024
@@ -25,6 +26,9 @@
 
 // logfile extension
 #define LOG_EXT ".log"
+
+// application version
+#define GLYCERIN_VERSION "0.0.2-dev"
 
 // Available formats for time information of
 // a line in the log.
@@ -256,7 +260,7 @@ get_log_dir (const char *base_dir)
 void
 print_help_and_exit (const char *arg0, int status)
 {
-  printf ("Usage: %s [OPTIONS] APPNAME\n\n", arg0);
+  printf ("Usage: %s [OPTION]... APPNAME\n\n", arg0);
   printf ("glycerin is a simple utility for logging a single application.\n\n");
   printf ("Options:\n");
   printf ("  -a u64 : maximum log file age in seconds\n");
@@ -266,6 +270,7 @@ print_help_and_exit (const char *arg0, int status)
   printf ("  -n u64 : maximum number of log files to keep\n");
   printf ("  -s u64 : maximum log file size in bytes\n");
   printf ("  -t     : cycle through timestamp formats for every line\n");
+  printf ("  -V     : prints the application version\n");
   exit (status);
 }
 
@@ -288,7 +293,20 @@ parse_cli (int argc, char *const *argv)
   int opt;
   unsigned long l;
 
-  while ((opt = getopt (argc, argv, ":tb:s:a:n:d:fh")) != -1)
+  static struct option long_options[] = {
+    { "time-format", no_argument, NULL, 't' },
+    { "buffer-size", required_argument, NULL, 'b' },
+    { "max-log-size", required_argument, NULL, 's' },
+    { "max-log-age", required_argument, NULL, 'a' },
+    { "log-number", required_argument, NULL, 'n' },
+    { "log-directory", required_argument, NULL, 'd' },
+    { "files-only", no_argument, NULL, 'f' },
+    { "help", optional_argument, NULL, 'h' },
+    { "version", no_argument, NULL, 'V' },
+    { NULL, 0, NULL, 0 }
+  };
+
+  while ((opt = getopt_long (argc, argv, ":tb:s:a:n:d:fhV", long_options, NULL)) != -1)
     {
       switch (opt)
         {
@@ -322,6 +340,10 @@ parse_cli (int argc, char *const *argv)
           break;
         case 'h':
           print_help_and_exit (argv[0], EXIT_FAILURE);
+          break;
+        case 'V':
+          printf ("glycerin version: %s\n", GLYCERIN_VERSION);
+          exit (EXIT_SUCCESS);
           break;
         case ':':
           error (EXIT_FAILURE, 0, "option is missing a value: %c", optopt);
