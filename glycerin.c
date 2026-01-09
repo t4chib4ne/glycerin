@@ -28,7 +28,7 @@
 #define LOG_EXT ".log"
 
 // application version
-#define GLYCERIN_VERSION "0.0.2-dev"
+#define GLYCERIN_VERSION "0.0.2"
 
 // Available formats for time information of
 // a line in the log.
