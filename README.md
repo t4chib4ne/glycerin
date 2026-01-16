@@ -75,7 +75,7 @@ exec glycerin <your options go here> $@
 
 ### Since nitro 0.7
 
-Simply symlink the parametrized glycerin service to the log of a service and nitro will handle the correct naming for glycerin: `glycerin@ -> myapp/log`.
+Simply symlink the parametrized glycerin service to the log of a service and nitro will handle the correct naming for glycerin. Change to a service directory and create `log -> ../glycerin@`.
 
 ### Before nitro 0.7
 
