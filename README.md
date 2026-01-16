@@ -73,7 +73,13 @@ glycerin is designed to be used as a parametrized service. Create a `glycerin@` 
 exec glycerin <your options go here> $@
 ```
 
-You can then create an instance of glycerin by creating as symlink in the service directory: `glycerin@my-app -> glycerin@`. In the `my-app` service create `log -> ../glycerin@my-app`. When creating the symlink for logging you might have to drop the `-r` flag of `ln` (I could not get it to work on my system otherwise).
+### Since nitro 0.7
+
+Simply symlink the parametrized glycerin service to the log of a service and nitro will handle the correct naming for glycerin: `glycerin@ -> myapp/log`.
+
+### Before nitro 0.7
+
+nitro 0.6 and earlier did not propagate parameters or service names to parametrized logs. You must create an instance of glycerin by creating as symlink in the service directory: `glycerin@my-app -> glycerin@`. In the `my-app` service create `log -> ../glycerin@my-app`. When creating the symlink for logging you might have to drop the `-r` flag of `ln` (I could not get it to work on my system otherwise).
 
 ## Contributing
 
